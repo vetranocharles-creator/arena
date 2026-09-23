@@ -4,12 +4,13 @@
 
 // ---- Configurable filters ----
 const FILTERS = {
-  MIN_MARKET_CAP_USD: 20000,      // marketCap, or fdv when marketCap is null
+  PUMPFUN_ONLY: true,             // only coins launched on pump.fun (set to false to allow any Solana coin)
+  MIN_MARKET_CAP_USD: 10000,      // marketCap, or fdv when marketCap is null
   MIN_LIQUIDITY_USD: 5000,
   MIN_AGE_MINUTES: 10,
   MAX_AGE_MINUTES: 24 * 60,
-  REQUIRE_M5_BUYS_GT_SELLS: true,
-  MIN_H1_TXNS: 50,                // buys + sells in the last hour
+  REQUIRE_M5_BUYS_GT_SELLS: false,
+  MIN_H1_TXNS: 30,                // buys + sells in the last hour
   MIN_H1_VOLUME_USD: 5000,
 };
 

@@ -210,8 +210,15 @@ function normalizePair(p, now = Date.now()) {
 
 // ---------- filters + scoring ----------
 
+// pump.fun mints end in "pump"; pairs trade on the bonding curve (pumpfun) or PumpSwap after graduation.
+const PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
+function isPumpFun(t) {
+  return (typeof t.address === 'string' && t.address.endsWith('pump')) || PUMP_DEX_IDS.has(t.dexId);
+}
+
 function checkFilters(t, f) {
   const reasons = [];
+  if (f.PUMPFUN_ONLY && !isPumpFun(t)) reasons.push('notPumpFun');
   if (t.marketCap < f.MIN_MARKET_CAP_USD) reasons.push('marketCap');
   if (t.liquidityUsd < f.MIN_LIQUIDITY_USD) reasons.push('liquidity');
   if (t.ageMinutes === null || t.ageMinutes < f.MIN_AGE_MINUTES || t.ageMinutes > f.MAX_AGE_MINUTES) reasons.push('age');
@@ -388,6 +395,7 @@ module.exports = {
   normalizePair,
   checkFilters,
   tractionScore,
+  isPumpFun,
   estimateSolUsd,
   toPublicToken,
   applySafetyChecks,
