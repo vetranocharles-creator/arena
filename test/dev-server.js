@@ -9,7 +9,7 @@ const tokens = NAMES.map(([name, symbol], i) => ({ address: addr(i + 1), pair: a
 function mkPair(t) {
   t.price *= 1 + (Math.random() - 0.48) * 0.04;
   const b = 20 + Math.floor(Math.random() * 120), s = 10 + Math.floor(Math.random() * 110);
-  return { chainId: 'solana', dexId: 'raydium', url: 'https://dexscreener.com/solana/' + t.pair, pairAddress: t.pair,
+  return { chainId: 'solana', dexId: 'pumpswap', url: 'https://dexscreener.com/solana/' + t.pair, pairAddress: t.pair,
     baseToken: { address: t.address, name: t.name, symbol: t.symbol }, quoteToken: { symbol: 'SOL' },
     priceUsd: String(t.price), priceNative: String(t.price / 150),
     txns: { m5: { buys: b, sells: t.symbol === 'PNUT' ? b + 5 : Math.min(s, b - 1) }, h1: { buys: 400, sells: 250 }, h6: { buys: 1, sells: 1 }, h24: { buys: 1, sells: 1 } },
