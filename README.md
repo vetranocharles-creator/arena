@@ -12,7 +12,7 @@ A memecoin tournament demo. Real Solana market data from DexScreener, a simulate
 - `test/api.test.js` : filtering and scoring tests against a mocked DexScreener (`npm test`)
 - `test/dev-server.js` : local server with mocked, moving market data (`npm run dev`, then open http://localhost:3000)
 
-Add `?demo=1` to the URL to force simulated mode.
+Only real coins are used. There are no simulated or placeholder coins.
 
 ## Deploy on Vercel (beginner steps)
 
@@ -27,5 +27,5 @@ To change the env variable later: Project > **Settings > Environment Variables**
 ## Notes
 
 - The browser only calls `/api/*`. DexScreener responses are cached in memory (60s discovery, 15s pairs) and at Vercel's edge via `s-maxage`, which keeps you well inside the rate limits.
-- If DexScreener is down or fewer than 8 tokens pass the filters, the bracket fills with simulated coins and the page says so.
+- If DexScreener is down or fewer than 8 tokens pass the filters, the page waits, shows a notice, and retries every 30 seconds until it has 8 real coins.
 - Filters are strict on purpose. If you often see fewer than 8 live coins, loosen the constants at the top of `api/pairs.js`.

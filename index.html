@@ -464,17 +464,6 @@ const CFG = {
   hbStart: 72, critical: 25, recovered: 30,
   koMs: 2200, intermissionSec: 10, feedMax: 8, launchesPerSeason: 2, ffLeft: 3,
 };
-const SEASON1 = [['🐸','Frog King','FROGK'],['🐱','Mooncat','MCAT'],['🦛','Grumbo','GRUMB'],['🐀','Pizzarat','PRAT'],
-  ['🦭','Cope Seal','COPE'],['🐌','Rocketsnail','SNAIL'],['🦉','Laser Owl','HOOT'],['🌵','Sad Cactus','SPIKE']];
-const ADJ = ['Sir','Lil','Turbo','Sad','Sleepy','Angry','Soggy','Mega','Tiny','Cursed','Royal','Based'];
-const NOUNS = [['🦆','Duck','QUACK'],['🍄','Shroom','SPORE'],['🦀','Crab','PINCH'],['🐼','Panda','ZZZ'],['🧇','Waffle','WAFL'],
-  ['🐮','Cow','MOO'],['🌶️','Pepper','HEAT'],['🦝','Raccoon','TRASH'],['🐙','Octo','INK'],['🐢','Turtle','SHELL'],
-  ['🦩','Flamingo','PINK'],['🐝','Bee','BZZ'],['🥔','Potato','SPUD'],['🦈','Shark','CHOMP']];
-const PREGRAD = [
-  { emoji:'🥯', name:'Old Bun', symbol:'BUN', pool:140, hb:78, decay:-0.08 },
-  { emoji:'❄️', name:'Lil Yeti', symbol:'YETI', pool:85, hb:60, decay:0 },
-  { emoji:'🦙', name:'Drama Llama', symbol:'LLAMA', pool:52, hb:38, decay:0.14 },
-];
 const LAUNCH_EMOJI = ['🐸','🐱','🦛','🐀','🦭','🐌','🦉','🌵','🦆','🍄','🦀','🐼','🧇','🐮','🌶️','🦝','🐙','🐢','🦩','🐝','🥔','🦈','🚀','👑','🔥','💎','🍕','🐲'];
 const ROUND_NAMES = ['Quarterfinal','Semifinal','Final'];
 const ROUND_COLS = ['Quarterfinals','Semifinals','Final'];
@@ -519,7 +508,7 @@ const FMT = {
 // ================= state =================
 const S = {
   mode: 'loading',        // 'live' | 'demo' for the current season
-  forceDemo: new URLSearchParams(location.search).has('demo'),
+  forceDemo: false,       // simulated coins removed: real coins only
   solUsd: 150, solUsdLocked: false,
   season: 0, roundIdx: 0, rounds: [], featured: 0,
   phase: 'loading',       // 'fight' | 'ko' | 'intermission' | 'loading'
@@ -579,17 +568,6 @@ function takenTickers() {
   for (const q of S.queue) s.add(q.symbol);
   return s;
 }
-function genIdentity(taken) {
-  for (let i = 0; i < 300; i++) {
-    const [emoji, noun, tick] = pick(NOUNS);
-    if (!taken.has(tick)) return { emoji, name: `${pick(ADJ)} ${noun}`, symbol: tick };
-  }
-  const [emoji, noun, tick] = pick(NOUNS);
-  let t;
-  do { t = tick.slice(0, 5) + randi(2, 9); } while (taken.has(t));
-  return { emoji, name: `${pick(ADJ)} ${noun}`, symbol: t };
-}
-
 // ================= bags =================
 function bagValue(id) {
   const b = S.bags.get(id), c = coin(id);
@@ -609,6 +587,11 @@ function totals() {
 
 // ================= season / rounds =================
 function startSeason(liveTokens) {
+  // Real coins only: wait until there are enough live coins to fill the bracket.
+  const gradAddrs0 = new Set(S.graduated.map(coin).filter((c) => c && c.kind === 'live' && c.status !== 'dissolved').map((c) => c.address));
+  const nLaunch = Math.min(S.queue.length, CFG.launchesPerSeason);
+  const nLive = (liveTokens || []).filter((t) => !gradAddrs0.has(t.address)).length;
+  if (nLive < 8 - nLaunch) return false;
   S.season++;
   // clear out merged coins from last season
   for (const [id, c] of S.coins) if (c.status === 'merged' && !S.bags.has(id)) S.coins.delete(id);
@@ -625,23 +608,9 @@ function startSeason(liveTokens) {
   const gradAddrs = new Set(S.graduated.map(coin).filter((c) => c && c.kind === 'live' && c.status !== 'dissolved').map((c) => c.address));
   const live = (liveTokens || []).filter((t) => !gradAddrs.has(t.address)).slice(0, 8 - fighters.length);
   for (const t of live) fighters.push(makeLiveCoin(t, hues[fighters.length]));
-  const taken = takenTickers();
-  const s1 = shuffle(SEASON1).filter(([, , t]) => !taken.has(t));
-  while (fighters.length < 8) {
-    let id;
-    if (S.season === 1 && s1.length) { const [emoji, name, symbol] = s1.shift(); id = { emoji, name, symbol }; }
-    else id = genIdentity(taken);
-    taken.add(id.symbol);
-    fighters.push(makeSimCoin({ ...id, h: hues[fighters.length] }));
-  }
 
-  S.mode = live.length ? 'live' : 'demo';
-  const expectedLive = 8 - launches.length;
-  const notice = $('#notice');
-  if (S.forceDemo) notice.hidden = true;
-  else if (live.length === 0) { notice.textContent = 'Live data unavailable, showing simulated coins.'; notice.hidden = false; }
-  else if (live.length < expectedLive) { notice.textContent = `Live data unavailable for ${expectedLive - live.length} of 8 slots, showing simulated coins there.`; notice.hidden = false; }
-  else notice.hidden = true;
+  S.mode = 'live';
+  $('#notice').hidden = true;
   applyModeUI();
 
   const order = shuffle(fighters);
@@ -650,8 +619,22 @@ function startSeason(liveTokens) {
     [null, null], [null],
   ];
   S.champion = null;
-  pushFeed('sys', `<b>Season ${S.season}</b> begins with ${live.length ? live.length + ' live pairs' : 'simulated coins'}`);
+  pushFeed('sys', `<b>Season ${S.season}</b> begins with ${live.length} live pairs`);
   startRound(0);
+  return true;
+}
+
+// Fetch real coins and start a season; if there are not enough, show a notice and retry.
+const RETRY_MS = 30000;
+async function seedSeason() {
+  S.phase = 'loading';
+  render();
+  const tokens = await loadLiveTokens();
+  if (startSeason(tokens)) return;
+  const notice = $('#notice');
+  notice.textContent = `Waiting for enough real coins to fill the bracket (found ${tokens.length} of 8). Retrying in ${RETRY_MS / 1000}s.`;
+  notice.hidden = false;
+  setTimeout(seedSeason, RETRY_MS);
 }
 
 function startRound(r) {
@@ -749,10 +732,7 @@ async function startNextSeason() {
   if (S.phase === 'loading') return;
   const champ = coin(S.champion);
   if (champ && champ.launchId) { const l = S.launches.find((x) => x.id === champ.launchId); if (l && l.status === 'Champion') l.status = 'Graduated'; }
-  S.phase = 'loading';
-  render();
-  const tokens = S.forceDemo ? [] : await loadLiveTokens();
-  startSeason(tokens);
+  await seedSeason();
 }
 
 // ================= simulation =================
@@ -1412,24 +1392,12 @@ $('#launchForm').addEventListener('submit', (e) => {
 });
 
 // ================= boot =================
-function seedGraduated() {
-  for (const p of PREGRAD) {
-    const c = makeSimCoin({ emoji: p.emoji, name: p.name, symbol: p.symbol, reserve: p.pool });
-    c.holders = Math.round(20 + p.pool * 8);
-    c.status = 'graduated'; c.hb = p.hb; c.decay = p.decay;
-    c.hbState = p.hb < CFG.critical ? 'critical' : 'healthy';
-    S.graduated.push(c.id);
-  }
-}
-
 async function boot() {
   applyModeUI();
-  seedGraduated();
   renderPreview();
   render();
-  const tokens = S.forceDemo ? [] : await loadLiveTokens();
-  startSeason(tokens);
   setInterval(tick, 1000);
+  await seedSeason();
 }
 boot();
 })();
