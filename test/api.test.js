@@ -121,6 +121,15 @@ function mockRes() {
 
   // ---- unit: filters ----
   const F = pairsHandler.FILTERS;
+  // Fixtures use the original strict thresholds on Raydium pairs; test pump.fun detection separately.
+  const LIVE = { ...F };
+  Object.assign(F, { PUMPFUN_ONLY: false, MIN_MARKET_CAP_USD: 20000, MIN_H1_TXNS: 50, REQUIRE_M5_BUYS_GT_SELLS: true });
+  assert.ok(dex.isPumpFun({ address: addr(5).slice(0, 40) + 'pump', dexId: 'raydium' }));
+  assert.ok(dex.isPumpFun({ address: addr(5), dexId: 'pumpswap' }));
+  assert.ok(!dex.isPumpFun({ address: addr(5), dexId: 'raydium' }));
+  assert.deepStrictEqual(dex.checkFilters({ ...dex.normalizePair(pair(T.good1), NOW) }, { ...F, PUMPFUN_ONLY: true }).reasons, ['notPumpFun']);
+  assert.strictEqual(LIVE.PUMPFUN_ONLY, true);
+  ok('pump.fun-only filter keeps pump.fun mints and PumpSwap pairs');
   const norm = (t) => dex.normalizePair(pair(t), NOW);
   assert.ok(dex.checkFilters(norm(T.good1), F).ok); ok('good token passes filters');
   assert.ok(dex.checkFilters(norm(T.fdvOnly), F).ok); assert.strictEqual(norm(T.fdvOnly).marketCap, 30000); ok('null marketCap falls back to fdv');
