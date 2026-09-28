@@ -1,34 +1,53 @@
 'use strict';
+/**
+ * GET /api/live?addresses=a,b,c
+ * Fresh data for the coins currently fighting (up to 30). The page polls this every 15s.
+ */
+const dex = require('./_dex.js');
 
-// GET /api/live?addresses=a,b,c  ->  latest pair data for tokens in play. One DexScreener call, cached 15s.
-
-const dex = require('./_dex');
+const MAX_ADDRESSES = 30;
 
 async function handler(req, res) {
+  if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+    return dex.sendJson(res, 405, { ok: false, error: 'Use GET.' }, 'no-store');
+  }
   const url = new URL(req.url || '/', 'http://localhost');
-  const raw = url.searchParams.get('addresses') || '';
-  const addresses = [...new Set(raw.split(',').map((s) => s.trim()).filter(Boolean))]
-    .filter(dex.isValidSolanaAddress)
-    .slice(0, 30);
+  const requested = [
+    ...new Set(
+      (url.searchParams.get('addresses') || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    ),
+  ];
+  const addresses = requested.filter(dex.isAddress).slice(0, MAX_ADDRESSES);
 
   if (!addresses.length) {
-    return dex.send(res, 400, { error: 'Pass ?addresses= with 1 to 30 Solana token addresses.' });
+    return dex.sendJson(
+      res,
+      400,
+      { ok: false, error: `Pass ?addresses= with 1 to ${MAX_ADDRESSES} Solana token addresses.` },
+      'no-store'
+    );
   }
 
   try {
-    const pairs = await dex.getPairsForTokens(addresses);
-    const best = dex.bestPairByToken(pairs);
-    const now = Date.now();
-    const tokens = {};
-    const missing = [];
-    for (const addr of addresses) {
-      const p = best.get(addr);
-      if (p) tokens[addr] = dex.toPublicToken(dex.normalizePair(p, now));
-      else missing.push(addr);
-    }
-    dex.send(res, 200, { fetchedAt: now, solUsd: dex.estimateSolUsd(pairs), tokens, missing }, 's-maxage=15, stale-while-revalidate=15');
-  } catch (e) {
-    dex.send(res, 502, { error: 'Live data unavailable', detail: String(e.message || e), tokens: {} });
+    const { pairs, stale } = await dex.fetchBestPairs(addresses);
+    const coins = addresses.filter((a) => pairs.has(a)).map((a) => dex.normalizePair(pairs.get(a)));
+    const missing = addresses.filter((a) => !pairs.has(a));
+    return dex.sendJson(
+      res,
+      200,
+      { ok: true, coins, missing, stale, generatedAt: new Date(dex.now()).toISOString() },
+      'public, max-age=0, s-maxage=10, stale-while-revalidate=60'
+    );
+  } catch (err) {
+    return dex.sendJson(
+      res,
+      502,
+      { ok: false, error: 'Live market data is unavailable right now.', detail: err.message, coins: [] },
+      'no-store'
+    );
   }
 }
 

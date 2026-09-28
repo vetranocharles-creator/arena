@@ -1,96 +1,123 @@
 'use strict';
+/**
+ * GET /api/pairs
+ * Returns up to 8 real Solana coins to seed a tournament season.
+ * Never invents coins: if fewer than 8 qualify, `ready` is false and `found` says how many did.
+ */
+const dex = require('./_dex.js');
 
-// GET /api/pairs  ->  seeds a tournament season with up to 8 real Solana pairs getting traction.
-
-// ---- Configurable filters ----
+/* ---------- Season filters: edit these to change which coins qualify ---------- */
 const FILTERS = {
-  PUMPFUN_ONLY: true,             // only coins launched on pump.fun (set to false to allow any Solana coin)
-  MIN_MARKET_CAP_USD: 10000,      // marketCap, or fdv when marketCap is null
+  PUMPFUN_ONLY: true, // mint ends in "pump", or the pair trades on pumpfun / pumpswap
+  MIN_MARKET_CAP_USD: 10000,
   MIN_LIQUIDITY_USD: 5000,
   MIN_AGE_MINUTES: 10,
-  MAX_AGE_MINUTES: 24 * 60,
-  REQUIRE_M5_BUYS_GT_SELLS: false,
-  MIN_H1_TXNS: 30,                // buys + sells in the last hour
+  MAX_AGE_HOURS: 24,
+  MIN_H1_TXNS: 30,
   MIN_H1_VOLUME_USD: 5000,
+  REQUIRE_M5_BUYS_GT_SELLS: false,
 };
 
-// ---- Optional on-chain safety checks (SOLANA_RPC_URL, else the public mainnet RPC) ----
-const SAFETY = {
-  ENABLED: true,
-  MAX_TOP10_SHARE: 0.35,          // reject if the top 10 holders (pool excluded when identifiable) own more
-  TIME_BUDGET_MS: 5000,           // stay well inside serverless time limits
-};
+const SEASON_SIZE = 8;
+const MAX_CANDIDATES = 90; // 3 DexScreener lookups of 30
+const SAFETY_BUDGET_MS = 5000;
+const SEASON_TTL_MS = 15000;
 
-const BRACKET_SIZE = 8;
-const SEASON_CACHE_MS = 60 * 1000;
+const round2 = (n) => Math.round(n * 100) / 100;
 
-const dex = require('./_dex');
+function safetyEnabled() {
+  return !/^(0|off|false|no)$/i.test(process.env.SAFETY_CHECKS || '');
+}
 
 async function buildSeason() {
-  const now = Date.now();
-  const discovered = await dex.getDiscoveredSolanaTokens();
-  const iconByAddr = new Map(discovered.map((d) => [d.tokenAddress, d.icon]));
-  const pairs = await dex.getPairsForTokens(discovered.map((d) => d.tokenAddress));
-  const solUsd = dex.estimateSolUsd(pairs);
-  const best = dex.bestPairByToken(pairs);
+  const { tokens, stale: discoveryStale } = await dex.discoverTokens();
+  const candidates = tokens.slice(0, MAX_CANDIDATES);
+  const meta = new Map(candidates.map((t) => [t.address, t]));
+  const { pairs, stale: pairsStale } = await dex.fetchBestPairs(candidates.map((t) => t.address));
 
-  const candidates = [];
-  for (const [addr, pair] of best) {
-    if (!iconByAddr.has(addr)) continue; // only tokens we discovered
-    const t = dex.normalizePair(pair, now);
-    if (!t.imageUrl) {
-      const icon = iconByAddr.get(addr);
-      if (icon && icon.startsWith('https://')) t.imageUrl = icon;
+  const rejectedBy = {};
+  const qualified = [];
+  for (const [address, pair] of pairs) {
+    const coin = dex.normalizePair(pair, meta.get(address));
+    const reasons = dex.checkFilters(coin, FILTERS);
+    if (reasons.length) {
+      for (const r of reasons) rejectedBy[r] = (rejectedBy[r] || 0) + 1;
+      continue;
     }
-    candidates.push(t);
+    coin.traction = round2(dex.traction(coin));
+    qualified.push(coin);
   }
+  qualified.sort((a, b) => b.traction - a.traction);
 
-  const passing = candidates
-    .filter((t) => dex.checkFilters(t, FILTERS).ok)
-    .map((t) => ({ ...t, traction: dex.tractionScore(t) }))
-    .sort((a, b) => b.traction - a.traction);
-
-  let selected;
-  let safetyRejected = [];
-  if (SAFETY.ENABLED && passing.length) {
-    const { accepted, rejected } = await dex.applySafetyChecks(passing, {
-      rpcUrl: process.env.SOLANA_RPC_URL || dex.DEFAULT_RPC_URL,
-      maxTop10Share: SAFETY.MAX_TOP10_SHARE,
-      budgetMs: SAFETY.TIME_BUDGET_MS,
-      want: BRACKET_SIZE,
+  let coins;
+  let safety;
+  if (safetyEnabled()) {
+    const result = await dex.applySafetyChecks(qualified, {
+      want: SEASON_SIZE,
+      rpcUrl: process.env.SOLANA_RPC_URL || dex.PUBLIC_RPC_URL,
+      budgetMs: SAFETY_BUDGET_MS,
     });
-    selected = accepted;
-    safetyRejected = rejected;
+    coins = result.accepted;
+    safety = {
+      enabled: true,
+      checked: result.checked,
+      skipped: result.skipped,
+      rejected: result.rejected,
+      rateLimited: result.rateLimited,
+      budgetExceeded: result.budgetExceeded,
+    };
   } else {
-    selected = passing.slice(0, BRACKET_SIZE);
+    coins = qualified.slice(0, SEASON_SIZE).map((c) => ({ ...c, safety: { status: 'off' } }));
+    safety = { enabled: false };
   }
 
   return {
-    mode: 'live',
-    fetchedAt: now,
-    solUsd,
-    tokens: selected.map(dex.toPublicToken),
-    stats: {
-      discovered: discovered.length,
-      withPairs: candidates.length,
-      passedFilters: passing.length,
-      safetyRejected,
-    },
+    ready: coins.length >= SEASON_SIZE,
+    found: coins.length,
+    needed: SEASON_SIZE,
+    coins,
+    stale: Boolean(discoveryStale || pairsStale),
+    discovered: tokens.length,
+    scanned: pairs.size,
+    qualified: qualified.length,
+    rejectedBy,
+    safety,
     filters: FILTERS,
+    generatedAt: new Date(dex.now()).toISOString(),
   };
 }
 
 async function handler(req, res) {
+  if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+    return dex.sendJson(res, 405, { ok: false, error: 'Use GET.' }, 'no-store');
+  }
   try {
-    const body = await dex.cached('season', SEASON_CACHE_MS, buildSeason);
-    dex.send(res, 200, body, 's-maxage=60, stale-while-revalidate=30');
-  } catch (e) {
-    // 200 with an empty list: the front end fills the bracket with simulated coins.
-    dex.send(res, 200, { mode: 'unavailable', error: 'Live data unavailable', detail: String(e.message || e), tokens: [] }, 'no-store');
+    const { value, stale } = await dex.cached('season', SEASON_TTL_MS, buildSeason, (v) => !v.stale);
+    return dex.sendJson(
+      res,
+      200,
+      { ok: true, ...value, stale: Boolean(value.stale || stale) },
+      'public, max-age=0, s-maxage=15, stale-while-revalidate=300'
+    );
+  } catch (err) {
+    return dex.sendJson(
+      res,
+      502,
+      {
+        ok: false,
+        error: 'Market data is unavailable right now.',
+        detail: err.message,
+        ready: false,
+        found: 0,
+        needed: SEASON_SIZE,
+        coins: [],
+      },
+      'no-store'
+    );
   }
 }
 
 module.exports = handler;
-module.exports.buildSeason = buildSeason;
 module.exports.FILTERS = FILTERS;
-module.exports.SAFETY = SAFETY;
+module.exports.SEASON_SIZE = SEASON_SIZE;
+module.exports.buildSeason = buildSeason;
